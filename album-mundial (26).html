@@ -777,7 +777,7 @@ function initAlbum(){
     const owned=getOwnedCount(t.id);
     const card=document.createElement('div');
     card.className='team-card';
-    card.innerHTML=`<div class="team-emoji">${t.emoji}</div><div class="team-name">${t.name}</div><div class="team-stickers">${owned}/60 figuritas</div>`;
+    card.innerHTML=`<div class="team-emoji">${t.emoji}</div><div class="team-name">${t.name}</div><div class="team-stickers">${owned}/${STICKERS.length} figuritas</div>`;
     card.onclick=()=>openAlbum(t.id);
     grid.appendChild(card);
   });
@@ -852,8 +852,8 @@ function renderCatTabs(){
 function renderAlbum(){
   const owned=state.teams[currentTeamId]?.stickers||{};
   const unique=Object.keys(owned).length;
-  document.getElementById('progressText').textContent=`${unique}/60`;
-  document.getElementById('progressFill').style.width=`${(unique/60)*100}%`;
+  document.getElementById('progressText').textContent=`${unique}/${STICKERS.length}`;
+  document.getElementById('progressFill').style.width=`${(unique/STICKERS.length)*100}%`;
 
   const filtered=currentCat==="Todas"?STICKERS:STICKERS.filter(s=>s.cat===currentCat);
   const grid=document.getElementById('stickerGrid');
@@ -872,7 +872,7 @@ function renderAlbum(){
       slot.innerHTML=makePaniniCard(s);
       slot.onclick=()=>showStickerModal(s);
     } else {
-      slot.innerHTML=`<div class="pempty"><div class="pempty-num">${s.id}</div><div class="pempty-icon">${s.icon}</div></div>`;
+      slot.innerHTML=`<div class="pempty"><div class="pempty-num">#${s.id}</div><div class="pempty-icon">${s.icon}</div><div style="font-size:10px;color:rgba(255,255,255,.6);text-align:center;padding:0 4px;line-height:1.2;margin-top:2px;font-weight:600">${s.name.length>12?s.name.substring(0,12)+'…':s.name}</div></div>`;
     }
     grid.appendChild(slot);
   });
@@ -1095,7 +1095,7 @@ function renderMarketOffers() {
         <div class="offer-header">
           <div style="font-size:36px">${sticker.icon}</div>
           <div class="offer-info">
-            <div class="offer-name">${sticker.name}</div>
+            <div class="offer-name">#${sticker.id} — ${sticker.name}</div>
             <div class="offer-team">${fromTeam.emoji} ${fromTeam.name} ofrece · <span style="color:${cfg.acc};font-size:11px">${sticker.cat}</span></div>
           </div>
           ${isOwn ? `<button class="btn btn-danger" style="padding:6px 12px;font-size:12px" onclick="cancelOffer('${key}')">🗑️ Retirar</button>` : ''}
@@ -1160,7 +1160,7 @@ function loadCounterStickers(offerKey) {
     }
     el.innerHTML = dups.map(s => `
       <div class="sticker-mini" id="cs_${offerKey}_${s.id}" onclick="selectCounterSticker('${offerKey}',${s.id})">
-        ${s.icon} ${s.name} <span style="color:var(--gold);font-size:10px">×${stickers[s.id]}</span>
+        ${s.icon} #${s.id} ${s.name} <span style="color:var(--gold);font-size:10px">×${stickers[s.id]}</span>
       </div>`).join('');
   });
 }
@@ -1371,12 +1371,25 @@ function renderMyTeam() {
         ${myOfferKeys.map(key => {
           const offer = myOffers[key];
           const s = STICKERS.find(x => x.id === offer.stickerId);
+          const counterEntries = offer.counters ? Object.entries(offer.counters) : [];
           const counters = offer.counters ? Object.values(offer.counters) : [];
-          return `<div style="display:flex;align-items:center;gap:10px;background:var(--dark3);border-radius:10px;padding:12px;margin-bottom:8px">
-            <span style="font-size:24px">${s?.icon||'❓'}</span>
-            <span style="flex:1;font-size:13px;font-weight:600">${s?.name||'?'}</span>
-            ${counters.length > 0 ? `<span style="background:var(--gold);color:#000;border-radius:999px;padding:2px 8px;font-size:11px;font-weight:700">${counters.length} oferta${counters.length>1?'s':''}</span>` : ''}
-            <button class="btn btn-danger" style="padding:5px 10px;font-size:11px" onclick="cancelOffer('${key}')">🗑️</button>
+          return `<div style="background:var(--dark3);border-radius:10px;padding:12px;margin-bottom:8px">
+            <div style="display:flex;align-items:center;gap:10px;margin-bottom:${counterEntries.length>0?'10px':'0'}">
+              <span style="font-size:24px">${s?.icon||'❓'}</span>
+              <span style="flex:1;font-size:13px;font-weight:600">#${s?.id} ${s?.name||'?'}</span>
+              ${counters.length > 0 ? `<span style="background:var(--gold);color:#000;border-radius:999px;padding:2px 8px;font-size:11px;font-weight:700">${counters.length} contraoferta${counters.length>1?'s':''}</span>` : ''}
+              <button class="btn btn-danger" style="padding:5px 10px;font-size:11px" onclick="cancelOffer('${key}')">🗑️</button>
+            </div>
+            ${counterEntries.map(([ckey, c]) => {
+              const cTeam = TEAMS.find(t => t.id === c.fromId);
+              const cSticker = STICKERS.find(s => s.id === c.stickerId);
+              return `<div style="display:flex;align-items:center;gap:8px;background:rgba(0,229,255,.06);border:1px solid rgba(0,229,255,.2);border-radius:8px;padding:8px 10px;margin-bottom:6px">
+                <span style="font-size:18px">${cSticker?.icon||'❓'}</span>
+                <span style="flex:1;font-size:12px;font-weight:600">${cTeam?.emoji} ${cTeam?.name} ofrece #${cSticker?.id} ${cSticker?.name}</span>
+                <button class="btn btn-primary" style="padding:5px 12px;font-size:11px" onclick="acceptCounter('${key}','${ckey}')">✅ Aceptar</button>
+                <button class="btn btn-danger" style="padding:5px 10px;font-size:11px" onclick="rejectCounter('${key}','${ckey}')">❌</button>
+              </div>`;
+            }).join('')}
           </div>`;
         }).join('')}
         <button class="btn btn-secondary" style="max-width:200px;margin-top:8px" onclick="marketTab='offers';renderMarket()">Ver todas las ofertas →</button>
@@ -1892,7 +1905,7 @@ function hrLaunch() {
   };
   saveState();
   renderTrivia();
-  triviaState.hrAutoTimer = setTimeout(() => hrAutoReveal(), 11000);
+  triviaState.hrAutoTimer = setTimeout(() => hrAutoReveal(), 16000);
 }
 
 function hrAutoReveal() {
@@ -1937,16 +1950,16 @@ function hrAutoReveal() {
 function hrAutoNext() {
   triviaState.currentQIdx++;
   triviaState.launched = false;
+  triviaState.phase = 'hr-control'; // reset from hr-reveal to hr-control
   if(!state.activeRound) state.activeRound = {};
   state.activeRound.currentQIdx = triviaState.currentQIdx;
   state.activeRound.phase = 'waiting';
-  // Write to Firebase directly without saveState debounce
   db.ref('gameState/activeRound').update({
     currentQIdx: triviaState.currentQIdx,
     phase: 'waiting'
   });
   renderTrivia();
-  // Auto-launch next question after 3s (HR sees "next question ready")
+  // Auto-launch next question after 3s
   triviaState.hrAutoTimer = setTimeout(() => hrLaunch(), 3000);
 }
 
@@ -2083,7 +2096,11 @@ function renderQuestion(el) {
 
   // Calculate remaining time based on server launch time
   const elapsed = triviaState.launchTime ? Math.floor((Date.now() - triviaState.launchTime)/1000) : 0;
-  const timeLeft = Math.max(0, 10 - elapsed);
+  const timeLeft = Math.max(0, 15 - elapsed);
+
+  // Reset any previous answer styles
+  triviaState.selectedAnswer = null;
+  triviaState.answered = false;
 
   el.innerHTML = `
     <div class="t-question-wrap">
@@ -2096,7 +2113,7 @@ function renderQuestion(el) {
           <svg width="70" height="70" viewBox="0 0 70 70">
             <circle cx="35" cy="35" r="30" fill="none" stroke="var(--dark3)" stroke-width="5"/>
             <circle cx="35" cy="35" r="30" fill="none" stroke="var(--gold)" stroke-width="5"
-              stroke-dasharray="188.5" stroke-dashoffset="${188.5*(1-timeLeft/10)}" id="timerCircle" stroke-linecap="round"/>
+              stroke-dasharray="188.5" stroke-dashoffset="${188.5*(1-timeLeft/15)}" id="timerCircle" stroke-linecap="round"/>
           </svg>
           <div class="t-timer-num" id="timerNum">${timeLeft}</div>
         </div>
@@ -2130,7 +2147,7 @@ function startTimer(initialTime) {
   clearInterval(triviaState.timerInterval);
   triviaState.timerInterval = setInterval(() => {
     const elapsed = triviaState.launchTime ? (Date.now() - triviaState.launchTime) / 1000 : 0;
-    const timeLeft = Math.max(0, 10 - elapsed);
+    const timeLeft = Math.max(0, 15 - elapsed);
     const numEl = document.getElementById('timerNum');
     const circleEl = document.getElementById('timerCircle');
     if(numEl) numEl.textContent = Math.ceil(timeLeft);
@@ -2168,7 +2185,7 @@ function teamAnswer(idx) {
     }
   });
   const elapsed = triviaState.launchTime ? Math.floor((Date.now() - triviaState.launchTime)/1000) : 5;
-  const timeLeft = Math.max(0, 10 - elapsed);
+  const timeLeft = Math.max(0, 15 - elapsed);
   triviaState.pendingBonus = timeLeft > 7 ? 3 : timeLeft > 3 ? 2 : 1;
   const q = triviaState.roundQuestions[triviaState.currentQIdx];
   const isCorrect = idx === q.a;
