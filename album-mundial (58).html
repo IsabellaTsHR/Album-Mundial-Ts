@@ -376,6 +376,16 @@ select:focus,input:focus{border-color:var(--gold)}
         <div class="admin-card-title">📋 HISTORIAL DE RONDAS</div>
         <div class="trivia-history" id="triviaHistory"></div>
       </div>
+      <div class="admin-card" style="grid-column:1/-1">
+        <div class="admin-card-title">🔍 LOG DE TRIVIA</div>
+        <div style="display:flex;gap:10px;align-items:center;margin-bottom:12px;flex-wrap:wrap">
+          <select id="logRoundSel" style="background:var(--card-bg);border:1px solid var(--border);color:#fff;padding:8px 12px;border-radius:8px;font-family:'Outfit',sans-serif">
+            <option value="">— Elegí una ronda —</option>
+          </select>
+          <button class="btn btn-secondary" onclick="loadTriviaLog()">🔍 Ver log</button>
+        </div>
+        <div id="logContainer" style="font-size:12px"></div>
+      </div>
       <div class="admin-card">
         <div class="admin-card-title">✨ ASIGNACIÓN MANUAL</div>
         <div class="form-row"><label>Equipo</label><select id="manualTeam"><option value="">— Select a team —</option></select></div>
@@ -1048,6 +1058,7 @@ function initAdmin(){
     pinSel.dispatchEvent(new Event('change'));
   }
   renderHistory();
+  populateLogRounds();
 }
 
 function changeTeamPin(){
@@ -1063,6 +1074,63 @@ function changeTeamPin(){
     document.getElementById('newPinInput').value='';
     const el=document.getElementById('currentPinDisplay');
     if(el) el.textContent=`PIN actual: ${pin}`;
+  });
+}
+
+function populateLogRounds(){
+  db.ref('triviaLog').once('value').then(snap => {
+    const data = snap.val() || {};
+    const sel = document.getElementById('logRoundSel');
+    if(!sel) return;
+    const rounds = Object.keys(data).sort();
+    sel.innerHTML = '<option value="">— Elegí una ronda —</option>' + rounds.map(r => `<option value="${r}">${r.replace('_',' ')}</option>`).join('');
+  });
+}
+
+function loadTriviaLog(){
+  const round = document.getElementById('logRoundSel').value;
+  if(!round){showToast('Elegí una ronda','error');return;}
+  const container = document.getElementById('logContainer');
+  container.innerHTML = '<div style="color:var(--muted)">Cargando...</div>';
+  db.ref(`triviaLog/${round}`).once('value').then(snap => {
+    const data = snap.val() || {};
+    const questions = Object.keys(data).sort();
+    if(!questions.length){container.innerHTML='<div style="color:var(--muted)">Sin datos para esta ronda</div>';return;}
+    let html = '';
+    questions.forEach(qKey => {
+      const qData = data[qKey];
+      html += `<div style="margin-bottom:16px;background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.08);border-radius:12px;overflow:hidden">
+        <div style="padding:10px 14px;background:rgba(0,229,255,0.08);border-bottom:1px solid rgba(0,229,255,0.15);font-family:'Bebas Neue',sans-serif;font-size:15px;letter-spacing:1px;color:#00e5ff">${qKey.toUpperCase()}</div>`;
+      // Get all team entries (excluding blocked logs)
+      const entries = Object.entries(qData).filter(([k]) => !k.includes('_blocked_'));
+      const blocked = Object.entries(qData).filter(([k]) => k.includes('_blocked_'));
+      TEAMS.forEach(team => {
+        const entry = entries.find(([k]) => parseInt(k) === team.id);
+        if(entry) {
+          const e = entry[1];
+          const icon = e.answered === false ? '⏰' : e.correct ? '✅' : '❌';
+          const detail = e.answered === false ? 'No respondió (timeout)' : e.correct ? `Correcto (${e.secondsUsed}s)` : `Incorrecto (${e.secondsUsed}s)`;
+          html += `<div style="display:flex;align-items:center;gap:10px;padding:8px 14px;border-bottom:1px solid rgba(255,255,255,0.04)">
+            <span style="font-size:18px">${team.emoji}</span>
+            <span style="flex:1;font-weight:600">${e.team||team.name}</span>
+            <span style="font-size:11px;color:var(--muted)">${detail}</span>
+            <span style="font-size:18px">${icon}</span>
+          </div>`;
+        } else {
+          html += `<div style="display:flex;align-items:center;gap:10px;padding:8px 14px;border-bottom:1px solid rgba(255,255,255,0.04);opacity:0.35">
+            <span style="font-size:18px">${team.emoji}</span>
+            <span style="flex:1;font-weight:600">${team.name}</span>
+            <span style="font-size:11px;color:var(--muted)">No conectado</span>
+            <span>—</span>
+          </div>`;
+        }
+      });
+      if(blocked.length){
+        html += `<div style="padding:8px 14px;background:rgba(255,60,60,0.06);font-size:11px;color:#ff6b6b">⚠️ ${blocked.length} intento(s) bloqueado(s) por múltiple dispositivo</div>`;
+      }
+      html += '</div>';
+    });
+    container.innerHTML = html;
   });
 }
 
@@ -2368,6 +2436,19 @@ function startTimer(initialTime) {
         triviaState.selectedAnswer = -1;
         document.querySelectorAll('.t-opt').forEach(b=>b.disabled=true);
         showToast('⏰ ¡Tiempo agotado!','error');
+        // Log no answer
+        if(triviaState.teamId) {
+          const t3 = TEAMS.find(x => x.id === triviaState.teamId);
+          db.ref(`triviaLog/round_${triviaState.roundNum}/q${triviaState.currentQIdx+1}/${triviaState.teamId}`).set({
+            team: t3?.name || triviaState.teamId,
+            emoji: t3?.emoji || '',
+            answered: false,
+            correct: false,
+            selectedIdx: -1,
+            blockedMultiDevice: false,
+            timestamp: Date.now()
+          });
+        }
       }
     }
   }, 100); // 100ms for very smooth animation
@@ -2383,6 +2464,14 @@ function teamAnswer(idx) {
       triviaState.answered = true;
       document.querySelectorAll('.t-opt').forEach(b=>b.disabled=true);
       showToast('⚠️ Tu equipo ya respondió esta pregunta','error');
+      // Log blocked attempt
+      const t2 = TEAMS.find(x => x.id === triviaState.teamId);
+      db.ref(`triviaLog/round_${triviaState.roundNum}/q${triviaState.currentQIdx+1}/${triviaState.teamId}_blocked_${Date.now()}`).set({
+        team: t2?.name || triviaState.teamId,
+        emoji: t2?.emoji || '',
+        blockedMultiDevice: true,
+        timestamp: Date.now()
+      });
       return;
     }
     // Lock immediately in Firebase
@@ -2411,6 +2500,22 @@ function doTeamAnswer(idx) {
   triviaState.pendingBonus = timeLeft > 7 ? 3 : timeLeft > 3 ? 2 : 1;
   const q = triviaState.roundQuestions[triviaState.currentQIdx];
   const isCorrect = idx === q.a;
+
+  // ── LOG: register answer in Firebase ──
+  const t = TEAMS.find(x => x.id === triviaState.teamId);
+  const logRef = db.ref(`triviaLog/round_${triviaState.roundNum}/q${triviaState.currentQIdx+1}/${triviaState.teamId}`);
+  logRef.set({
+    team: t?.name || triviaState.teamId,
+    emoji: t?.emoji || '',
+    answered: true,
+    correct: isCorrect,
+    selectedIdx: idx,
+    correctIdx: q.a,
+    secondsUsed: elapsed,
+    blockedMultiDevice: false,
+    timestamp: Date.now()
+  });
+
   if(isCorrect) {
     // Write to a dedicated scores path that saveState never touches
     const roundKey = 'triviaScores/round_' + triviaState.roundNum;
