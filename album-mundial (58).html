@@ -1136,11 +1136,19 @@ function loadTriviaLog(){
 
 function renderHistory(){
   const hist=document.getElementById('triviaHistory');
-  if(!state.history.length){hist.innerHTML='';return;}
-  hist.innerHTML='<div style="font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:8px">Historial</div>';
-  [...state.history].reverse().slice(0,8).forEach(h=>{
-    const t1=TEAMS.find(t=>t.id==h.w1),t2=TEAMS.find(t=>t.id==h.w2),t3=TEAMS.find(t=>t.id==h.w3);
-    hist.innerHTML+=`<div class="history-item"><span class="history-round">Ronda ${h.round}</span><span>🥇${t1?.emoji||'—'} 🥈${t2?.emoji||'—'} 🥉${t3?.emoji||'—'}</span></div>`;
+  // Read from Firebase backup path to ensure completeness
+  db.ref('gameState/roundHistory').once('value').then(snap => {
+    const fbHistory = snap.val() || {};
+    const fbRounds = Object.values(fbHistory).sort((a,b) => b.round - a.round).slice(0,8);
+    const localHistory = [...(state.history||[])].reverse().slice(0,8);
+    // Merge: use Firebase rounds as source of truth
+    const allRounds = fbRounds.length ? fbRounds : localHistory;
+    if(!allRounds.length){hist.innerHTML='';return;}
+    hist.innerHTML='<div style="font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:8px">Historial</div>';
+    allRounds.forEach(h=>{
+      const t1=TEAMS.find(t=>t.id==h.w1),t2=TEAMS.find(t=>t.id==h.w2),t3=TEAMS.find(t=>t.id==h.w3);
+      hist.innerHTML+=`<div class="history-item"><span class="history-round">Ronda ${h.round}</span><span>🥇${t1?.emoji||'—'} 🥈${t2?.emoji||'—'} 🥉${t3?.emoji||'—'}</span></div>`;
+    });
   });
 }
 
@@ -2200,8 +2208,14 @@ function hrAutoReveal() {
   const roundKey = 'triviaScores/round_' + triviaState.roundNum;
   db.ref(roundKey).once('value').then(snap => {
     const fbScores = snap.val() || {};
-    Object.entries(fbScores).forEach(([tid,pts]) => {
-      triviaState.scores[parseInt(tid)] = pts;
+    Object.entries(fbScores).forEach(([tid,val]) => {
+      if(typeof val === 'object' && val !== null) {
+        triviaState.scores[parseInt(tid)] = val.pts || 0;
+        triviaState.timestamps = triviaState.timestamps || {};
+        triviaState.timestamps[parseInt(tid)] = val.lastAnswerMs || 0;
+      } else {
+        triviaState.scores[parseInt(tid)] = val || 0;
+      }
     });
   }).catch(e => console.error('Score read error:', e));
 
@@ -2242,7 +2256,12 @@ function hrFinish() {
 }
 
 function doHrFinish() {
-  const allSorted = TEAMS.map(t=>({...t, pts: triviaState.scores[t.id]||0})).sort((a,b)=>b.pts-a.pts);
+  const allSorted = TEAMS.map(t=>({...t, pts: triviaState.scores[t.id]||0, ts: (triviaState.timestamps||{})[t.id]||0})).sort((a,b)=>{
+    if(b.pts !== a.pts) return b.pts - a.pts;
+    // Tiebreak: earlier timestamp wins (answered faster)
+    if(a.ts && b.ts) return a.ts - b.ts;
+    return 0;
+  });
   const scorers = allSorted.filter(t => t.pts > 0);
   const connectedIds = Object.keys(state.activeRound?.connectedTeams || {}).map(Number);
   const connected = allSorted.filter(t => connectedIds.includes(t.id));
@@ -2283,6 +2302,19 @@ function doHrFinish() {
     if(!state.usedQIds) state.usedQIds = [];
     triviaState.roundQuestions.forEach(q => { const idx = TRIVIA_QUESTIONS.indexOf(q); if(idx>-1) state.usedQIds.push(idx); });
     state.activeRound = {phase:'finished', scores:{...triviaState.scores}, roundNum:triviaState.roundNum};
+
+    // Save history independently to avoid losing it if main saveState fails
+    const historyEntry = {
+      round: triviaState.roundNum,
+      date: new Date().toLocaleDateString('es'),
+      w1: scorers[0]?.id||null,
+      w2: scorers[1]?.id||null,
+      w3: scorers[2]?.id||null,
+      w1name: scorers[0]?.name||'',
+      w2name: scorers[1]?.name||'',
+      w3name: scorers[2]?.name||''
+    };
+    db.ref(`gameState/roundHistory/round_${triviaState.roundNum}`).set(historyEntry);
 
     // Write directly to Firebase
     db.ref('gameState').set(JSON.parse(JSON.stringify(state))).then(() => {
@@ -2521,8 +2553,12 @@ function doTeamAnswer(idx) {
     const roundKey = 'triviaScores/round_' + triviaState.roundNum;
     const scoreRef = db.ref(roundKey + '/' + triviaState.teamId);
     scoreRef.once('value').then(snap => {
-      const current = snap.val() || 0;
-      scoreRef.set(current + triviaState.pendingBonus).then(() => {
+      const current = snap.val()?.pts !== undefined ? snap.val().pts : (snap.val() || 0);
+      // Store pts + timestamp for precise tiebreaking
+      scoreRef.set({
+        pts: (typeof snap.val() === 'number' ? snap.val() : current) + triviaState.pendingBonus,
+        lastAnswerMs: Date.now()
+      }).then(() => {
         console.log('Score written: team', triviaState.teamId, 'pts', current + triviaState.pendingBonus);
       });
     });
@@ -2613,8 +2649,14 @@ function showFinalResults() {
   const roundKey = 'triviaScores/round_' + triviaState.roundNum;
   db.ref(roundKey).once('value').then(snap => {
     const fbScores = snap.val() || {};
-    Object.entries(fbScores).forEach(([tid,pts]) => {
-      triviaState.scores[parseInt(tid)] = pts;
+    Object.entries(fbScores).forEach(([tid,val]) => {
+      if(typeof val === 'object' && val !== null) {
+        triviaState.scores[parseInt(tid)] = val.pts || 0;
+        triviaState.timestamps = triviaState.timestamps || {};
+        triviaState.timestamps[parseInt(tid)] = val.lastAnswerMs || 0;
+      } else {
+        triviaState.scores[parseInt(tid)] = val || 0;
+      }
     });
   }).catch(()=>{}).finally(() => {
     triviaState.sortedResults = TEAMS.map(t=>({...t,pts:triviaState.scores[t.id]||0})).sort((a,b)=>b.pts-a.pts);
@@ -2845,8 +2887,14 @@ function renderHRReveal(el) {
   const roundKey = 'triviaScores/round_' + triviaState.roundNum;
   db.ref(roundKey).once('value').then(snap => {
     const fbScores = snap.val() || {};
-    Object.entries(fbScores).forEach(([tid,pts]) => {
-      triviaState.scores[parseInt(tid)] = pts;
+    Object.entries(fbScores).forEach(([tid,val]) => {
+      if(typeof val === 'object' && val !== null) {
+        triviaState.scores[parseInt(tid)] = val.pts || 0;
+        triviaState.timestamps = triviaState.timestamps || {};
+        triviaState.timestamps[parseInt(tid)] = val.lastAnswerMs || 0;
+      } else {
+        triviaState.scores[parseInt(tid)] = val || 0;
+      }
     });
 
     el.innerHTML = `
